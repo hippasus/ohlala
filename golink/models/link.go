@@ -7,7 +7,7 @@ import (
     "github.com/QLeelulu/goku/form"
     "github.com/QLeelulu/ohlala/golink"
     "github.com/QLeelulu/ohlala/golink/utils"
-    "net/url"
+    // "net/url"
     "strconv"
     "strings"
     "time"
@@ -56,14 +56,16 @@ func (l Link) Host() string {
     if !l.IsUrl() {
         return ""
     }
-    u, err := url.Parse(l.Context)
-    if err != nil {
-        return ""
-    }
-    if strings.Index(u.Host, "www.") == 0 {
-        return u.Host[4:]
-    }
-    return u.Host
+
+    //u, err := url.Parse(l.Context)
+    //if err != nil {
+    //    return ""
+    //}
+    //if strings.Index(u.Host, "www.") == 0 {
+    //    return u.Host[4:]
+    //}
+    //return u.Host
+	return utils.GetUrlHost(l.Context)
 }
 
 // 投票得分
@@ -235,16 +237,17 @@ func Link_SaveMap(m map[string]interface{}) int64 {
 // 如果保存失败，则返回错误信息
 // 返回为 success, linkId, errors.
 // 如果success为false并且linkId大于0，则为提交的url已经存在.
-func Link_SaveForm(f *form.Form, userId int64, resubmit bool) (bool, int64, []string) {
+func Link_SaveForm(f *form.Form, userId int64, resubmit bool) (bool, int64, []string, map[string]interface{}) {
     var id int64
+	var m map[string]interface{}
     errorMsgs := make([]string, 0)
     if f.Valid() {
-        m := f.CleanValues()
+        m = f.CleanValues()
         if !resubmit {
             link, err := Link_GetByUrl(m["context"].(string))
             if err == nil && link != nil && link.Id > 0 {
                 errorMsgs = append(errorMsgs, "Url已经提交过")
-                return false, link.Id, errorMsgs
+                return false, link.Id, errorMsgs, nil
             }
         }
         m["topics"] = buildTopics(m["topics"].(string))
@@ -263,9 +266,9 @@ func Link_SaveForm(f *form.Form, userId int64, resubmit bool) (bool, int64, []st
         }
     }
     if len(errorMsgs) < 1 {
-        return true, id, nil
+        return true, id, nil, m
     }
-    return false, id, errorMsgs
+    return false, id, errorMsgs, nil
 }
 
 // topic可以用英文逗号或者空格分隔
@@ -531,4 +534,50 @@ func Link_IncClickCount(linkId int64, inc int) (sql.Result, error) {
     defer db.Close()
 
     return IncCountById(db, "link", linkId, "click_count", 1)
+}
+
+
+// 根据id列表获取link
+func Link_GetByIdList(searchItems []utils.SearchHitItem) ([]Link, error) {
+	hashTable := map[int64]*Link{}
+    var db *goku.MysqlDB = GetDB()
+    defer db.Close()
+
+	var strLinkIdList string
+	for _, item := range searchItems {
+		strLinkIdList += item.Id + ","
+	}
+	strLinkIdList += "0"
+
+	qi := goku.SqlQueryInfo{}
+	qi.Fields = "id, user_id, title, context, topics, vote_up, vote_down, view_count, comment_count, create_time, status"
+	qi.Where = "id IN(" + strLinkIdList + ")" 
+	rows, err := db.Select("link", qi)
+
+	if err != nil {
+	    goku.Logger().Errorln(err.Error())
+	    return nil, err
+	}
+	defer rows.Close()
+
+    links := make([]Link, 0)
+    for rows.Next() {
+        link := &Link{}
+        err = rows.Scan(&link.Id, &link.UserId, &link.Title, &link.Context, &link.Topics,
+            &link.VoteUp, &link.VoteDown, &link.ViewCount, &link.CommentCount, &link.CreateTime, &link.Status)
+        if err != nil {
+            goku.Logger().Errorln(err.Error())
+            return nil, err
+        }
+        hashTable[link.Id] = link
+    }
+	for _, item := range searchItems {
+		linkId, err := strconv.ParseInt(item.Id, 10, 64)
+		link := hashTable[linkId]
+		if err == nil && link != nil  {
+			links = append(links, *link)
+		}
+	}
+
+    return links, nil
 }
